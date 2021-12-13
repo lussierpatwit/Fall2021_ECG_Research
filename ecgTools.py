@@ -6,7 +6,13 @@ from scipy.fft import rfft, rfftfreq, irfft, fft, fftfreq, ifft
 import tensorflow as tf
 from tensorflow.keras import datasets, layers, models
 from tensorflow.keras.models import load_model
+import Adafruit_GPIO.SPI as SPI
+import Adafruit_MCP3008
+import time
+import os
 
+
+	
 class ecgTools:
 	def __init__(self, sampleRate=0, duration=0):
 		self.sampleRate, self.duration = sampleRate, duration
@@ -22,6 +28,22 @@ class ecgTools:
 		ecgNp = np.array(ecgRaw)
 		return ecgNp
 	
+	# Uses SPI interface to record 'segmentSize' number of data points 
+	# from the MCP3008 ADC and stores data in text file
+	def readFromSensor(self,segmentSize):
+		SPI_PORT = 0
+		SPI_DEVICE = 0
+		mcp = Adafruit_MCP3008.MCP3008(spi=SPI.SpiDev(SPI_PORT,SPI_DEVICE))
+		i = 0
+		f = open('ecgOut.txt',"w")
+		while i < segmentSize:
+			temp = mcp.read_adc(0)
+			f.write(str(temp))
+			f.write('\n')
+			print(temp)
+			i+=1
+			time.sleep(.004)
+			
 	# Takes in the record, physionet database name, start point and end point then returns
 	# a numpy array of the record from physionet
 	def getPhysionetData(self, record, path, start, end):
@@ -40,18 +62,18 @@ class ecgTools:
 	def reshape(self, ecgIn):
 		return ecgIn.reshape(1,ecgIn.shape[0],1)
 		
-	# Takes in ecg array and applys a butterworth filter to the data and returns the result
-	def butterFilt(self,ecgIn):
+	# Takes in ecg array and a string 'high' or 'low' and applies a butterworth filter to the data and returns the result
+	def butterFilt(self,ecgIn,cutoff,order,highlow):
 		T = 20
 		fs = 250
-		cutoff = 30
+#		cutoff = 30
 		nyq = 0.5*fs
 		
-		order = 2
+#		order = 2
 		n=int(T*fs)
 		
 		normalCutoff = cutoff/nyq
-		b, a = butter(order, normalCutoff, btype = 'low',analog=False)
+		b, a = butter(order, normalCutoff, btype = highlow, analog=False)
 		y = filtfilt(b,a,ecgIn)
 		return y
 		
@@ -86,6 +108,7 @@ class ecgTools:
 	def denoiseFFT(self, FFT, freq, targetHz):
 		pointsPerFreq = len(freq)/(self.sampleRate/2)
 		targetIndex = int(pointsPerFreq*targetHz)
+		
 		FFT[targetIndex-(10*int(pointsPerFreq)):targetIndex+(10*int(pointsPerFreq))] = 0
 		return FFT
 	
@@ -98,19 +121,21 @@ class ecgTools:
 		
 	# Takes in a list of ecg recordings, a start and end point, and a list of labels in the
 	# same order as the ecg's then plots them on a single graph
-	def ecgPlot(self, ecgList, start, end, labelList):
+	def ecgPlot(self, ecgList, start, end, labelList, title):
 		for i in range(len(ecgList)):
 			plt.plot(ecgList[i][start:end], label = labelList[i])
 		plt.legend(loc = "upper left")
+		plt.title(title)
 		plt.show()
-	
+	# Takes in an ECG record and a string for the label and plots the Frequency plot generated
+	# by a FFT then plots the new version resultig from denoiseFFT
 	def fftPlot(self, ecgIn, pltLabel):
 		fft, freq = self.doFFT(ecgIn)
 		plt.figure(100)
 		plt.plot(freq,np.abs(fft))
 		plt.title(f'{pltLabel} FFT')
 		plt.figure(200)
-		denoised = self.denoiseFFT(fft, freq, 70)
+		denoised = self.denoiseFFT(fft, freq, 63)
 		plt.plot(freq,np.abs(denoised))
 		plt.show()
 	
@@ -137,9 +162,11 @@ class ecgTools:
 
 		model_tf.add(layers.Dense(3,activation='softmax'))
 
-		model_tf.load_weights(modelLocation)
+		model_tf.load_weights(modelLocation).expect_partial()
 		
 		prediction = model_tf.predict(ecgIn)
 		for i in range(len(prediction)):
 			prediction[i] = np.round(prediction[i],decimals=1)
 		return categories[np.argmax(prediction,axis=None,out=None)]
+	
+
